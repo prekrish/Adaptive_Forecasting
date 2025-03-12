@@ -281,12 +281,12 @@ class AdaptiveForecaster:
             fh = self.fh
         
         print("Making predictions...")
-        self.predictions = self.grid_search.best_forecaster_.predict(fh=fh, X=X)
+        self.predictions = self.grid_search.best_forecaster_.predict(fh=list(range(1, fh + 1)), X=X)
         
         if return_pred_int:
             try:
                 self.prediction_intervals = self.grid_search.best_forecaster_.predict_interval(
-                    fh=fh, X=X, coverage=coverage
+                    fh=list(range(1, fh + 1)), X=X, coverage=coverage
                 )
             except Exception as e:
                 print(f"Warning: Could not compute prediction intervals: {e}")
@@ -424,6 +424,75 @@ class AdaptiveForecaster:
         plt.grid(True)
         
         return plt.gcf()
+    """
+     Extension to AdaptiveForecaster class with refit_on_full_data method
+    """
+
+    def future_forecast(self, y, future_horizon=12):
+        """
+        Refit the model on the full dataset using the best parameters
+        found during grid search, and generate future predictions.
+        
+        Parameters
+        ----------
+        y : pd.Series
+            The full time series dataset
+        future_horizon : int, default=12
+            Number of periods to forecast into the future
+            
+        Returns
+        -------
+        future_predictions : pd.Series
+            Forecasts for the future periods
+        """
+        if not hasattr(self, 'best_params') or self.best_params is None:
+            raise ValueError("The forecaster must be fitted before calling refit_on_full_data")
+        
+        # Store the original forecast horizon
+        original_fh = self.fh
+        
+        # Set the forecast horizon for future predictions
+        self.fh = list(range(1, future_horizon + 1))
+        
+        print(f"Refitting {self.algorithm} on full dataset with best parameters...")
+        
+        # Create a new grid search with only the best parameters
+        # (wrap each parameter value in a list to match param_grid format)
+        best_param_grid = {key: [value] for key, value in self.best_params.items()}
+        
+        # Save old grid search to restore later if needed
+        old_grid_search = self.grid_search if hasattr(self, 'grid_search') else None
+        
+        # Set up a new cross-validation splitter
+        self._setup_cv_splitter(y)
+        
+        # Create a grid search with the single set of parameters
+        # This effectively just fits once with the best parameters
+        from sktime.forecasting.model_selection import ForecastingGridSearchCV
+        
+        self.grid_search = ForecastingGridSearchCV(
+            forecaster=self.forecaster.permuted,
+            param_grid=best_param_grid,
+            cv=self.cv_splitter,
+            scoring=self.metric_func,
+            n_jobs=self.n_jobs,
+            verbose=0
+        )
+        
+        # Fit on full dataset
+        self.grid_search.fit(y, fh=self.fh)
+        
+        # Generate future predictions
+        print(f"Generating future predictions for {future_horizon} periods...")
+        future_predictions = self.predict()
+        
+        # For clarity, we'll mark that this forecaster is now fitted on full data
+        self.is_fitted_on_full_data = True
+        
+        # Restore original forecast horizon
+        self.fh = original_fh
+        
+        return future_predictions
     
     def summary(self, include_metrics=None):
         """
