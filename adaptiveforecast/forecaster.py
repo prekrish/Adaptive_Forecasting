@@ -281,7 +281,7 @@ class AdaptiveForecaster:
             fh = self.fh
         
         print("Making predictions...")
-        self.predictions = self.grid_search.best_forecaster_.predict(fh=list(range(1, fh + 1)), X=X)
+        self.predictions = self.grid_search.best_forecaster_.predict(fh, X=X)
         
         if return_pred_int:
             try:
@@ -366,69 +366,8 @@ class AdaptiveForecaster:
         
         return scores
     
-    def plot_forecasts(self, y=None, title=None, figsize=(15, 7), include_intervals=True):
-        """
-        Plot the time series, forecasts, and prediction intervals.
-        
-        Parameters
-        ----------
-        y : pd.Series, optional
-            The full time series data. If None, uses the train and test data.
-        title : str, optional
-            The title of the plot.
-        figsize : tuple, default=(15, 7)
-            The figure size.
-        include_intervals : bool, default=True
-            Whether to include prediction intervals in the plot.
-        
-        Returns
-        -------
-        fig : matplotlib.figure.Figure
-            The figure object.
-        """
-        if self.predictions is None:
-            raise ValueError("No predictions available. Call predict() first.")
-        
-        plt.figure(figsize=figsize)
-        
-        # Plot historical data
-        if y is not None:
-            plt.plot(y.index, y, 'k-', label='Historical Data')
-        else:
-            if self.train_y is not None:
-                plt.plot(self.train_y.index, self.train_y, 'k-', label='Training Data')
-            if self.test_y is not None:
-                plt.plot(self.test_y.index, self.test_y, 'b-', label='Test Data')
-        
-        # Plot predictions
-        plt.plot(self.predictions.index, self.predictions, 'r-', 
-                 label=f'{self.algorithm.capitalize()} Forecast')
-        
-        # Plot prediction intervals if available
-        if include_intervals and self.prediction_intervals is not None:
-            for coverage in self.prediction_intervals.index.get_level_values(0).unique():
-                lower = self.prediction_intervals.loc[coverage]["lower"]
-                upper = self.prediction_intervals.loc[coverage]["upper"]
-                plt.fill_between(
-                    lower.index, lower, upper, alpha=0.2, color='r',
-                    label=f"{int(coverage*100)}% Prediction Interval"
-                )
-        
-        # Set title and labels
-        if title is None:
-            title = f"{self.algorithm.capitalize()} Forecast with {self.cv_strategy.capitalize()} CV"
-        plt.title(title)
-        plt.xlabel('Time')
-        plt.ylabel('Value')
-        plt.legend()
-        plt.grid(True)
-        
-        return plt.gcf()
-    """
-     Extension to AdaptiveForecaster class with refit_on_full_data method
-    """
 
-    def future_forecast(self, y, future_horizon=12):
+    def forecast_future(self, y, future_horizon=12):
         """
         Refit the model on the full dataset using the best parameters
         found during grid search, and generate future predictions.
@@ -439,60 +378,60 @@ class AdaptiveForecaster:
             The full time series dataset
         future_horizon : int, default=12
             Number of periods to forecast into the future
-            
+                
         Returns
         -------
-        future_predictions : pd.Series
-            Forecasts for the future periods
+        dict
+            Dictionary containing:
+            - result_id: unique identifier for this forecast
+            - test_predictions: predictions on test set if available
+            - best_forecaster: fitted forecaster on full data
+            - future_predictions: forecasts for future periods
+            - metrics: test metrics if available
+            - best_params: best parameters from grid search
         """
         if not hasattr(self, 'best_params') or self.best_params is None:
-            raise ValueError("The forecaster must be fitted before calling refit_on_full_data")
+            raise ValueError("The forecaster must be fitted before calling forecast_future")
+
+        from datetime import datetime
         
-        # Store the original forecast horizon
+        # Store original forecast horizon
         original_fh = self.fh
         
-        # Set the forecast horizon for future predictions
-        self.fh = list(range(1, future_horizon + 1))
+        # Get test predictions and metrics if we have test data
+        test_predictions = None
+        test_metrics = None
+        if self.test_y is not None:
+            test_predictions = self.predict(fh=list(range(1, len(self.test_y) + 1)))
+            test_metrics = self.evaluate(metrics=['rmse', 'mape', 'mae', 'mse'])
         
+        # Refit on full dataset with best parameters
         print(f"Refitting {self.algorithm} on full dataset with best parameters...")
-        
-        # Create a new grid search with only the best parameters
-        # (wrap each parameter value in a list to match param_grid format)
-        best_param_grid = {key: [value] for key, value in self.best_params.items()}
-        
-        # Save old grid search to restore later if needed
-        old_grid_search = self.grid_search if hasattr(self, 'grid_search') else None
-        
-        # Set up a new cross-validation splitter
-        self._setup_cv_splitter(y)
-        
-        # Create a grid search with the single set of parameters
-        # This effectively just fits once with the best parameters
-        from sktime.forecasting.model_selection import ForecastingGridSearchCV
-        
-        self.grid_search = ForecastingGridSearchCV(
-            forecaster=self.forecaster.permuted,
-            param_grid=best_param_grid,
-            cv=self.cv_splitter,
-            scoring=self.metric_func,
-            n_jobs=self.n_jobs,
-            verbose=0
-        )
-        
-        # Fit on full dataset
-        self.grid_search.fit(y, fh=self.fh)
+        best_forecaster = self.grid_search.best_forecaster_.fit(y)
         
         # Generate future predictions
         print(f"Generating future predictions for {future_horizon} periods...")
-        future_predictions = self.predict()
+        future_fh = list(range(1, future_horizon + 1))
+        future_predictions = best_forecaster.predict(fh=future_fh)
         
-        # For clarity, we'll mark that this forecaster is now fitted on full data
-        self.is_fitted_on_full_data = True
+        # Create unique result ID
+        result_id = f"{self.algorithm}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
         # Restore original forecast horizon
         self.fh = original_fh
         
-        return future_predictions
+        # Compile results
+        results = {
+            "result_id": result_id,
+            "forecaster": self,
+            "test_predictions": test_predictions,
+            "best_forecaster": best_forecaster,
+            "future_predictions": future_predictions,
+            "metrics": test_metrics,
+            "best_params": self.best_params
+        }
+        
+        return results
     
     def summary(self, include_metrics=None):
         """
@@ -557,37 +496,3 @@ class AdaptiveForecaster:
         print("="*50 + "\n")
         
         return summary_dict
-
-# Example usage
-if __name__ == "__main__":
-    from sktime.datasets import load_airline
-    
-    # Load data
-    y = load_airline()
-    
-    # Create and configure forecaster
-    forecaster = AdaptiveForecaster(
-        algorithm='exp_smoothing',
-        seasonal_period=12,
-        fh=3,
-        cv_strategy='expanding',
-        cv_initial_window=36,
-        metric='rmse'
-    )
-    
-    # Split data
-    train_y, test_y = forecaster.split_data(y)
-    
-    # Fit and predict
-    forecaster.fit(train_y)
-    predictions = forecaster.predict(return_pred_int=True)
-    
-    # Evaluate
-    score = forecaster.evaluate()
-    
-    # Plot results
-    fig = forecaster.plot_forecasts(y)
-    plt.show()
-    
-    # Print summary
-    forecaster.summary()
