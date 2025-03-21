@@ -22,7 +22,7 @@ from sktime.performance_metrics.forecasting import (
 )
 
 # Import our models factory
-from models import get_forecaster, ALGORITHM_MAP
+from adaptiveforecast.models import get_forecaster, ALGORITHM_MAP
 
 class AdaptiveForecaster:
     """

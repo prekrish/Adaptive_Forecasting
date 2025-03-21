@@ -211,9 +211,10 @@ def compare_and_select_best_model(
     model_results: Dict,
     metric: str = 'mape',
     return_comparison: bool = True
-) -> Tuple[str, pd.Series, Dict]:
+) -> Tuple[str, pd.Series, Dict, Dict]:
     """
     Compare models based on specified metric and return the best model's future predictions.
+    Also adds a 'is_best_model' flag to the model_results dictionary.
     
     Parameters
     ----------
@@ -232,7 +233,11 @@ def compare_and_select_best_model(
         - comparison_dict: dict containing:
             - 'metrics_comparison': pd.DataFrame with all metrics for all models
             - 'best_metrics': dict of best metrics and corresponding models
+        - model_results: dict, updated model results with is_best_model flags
     """
+    # Create a copy of model_results to avoid modifying the input directly
+    model_results = model_results.copy()
+    
     # Initialize storage for metrics
     metrics_data = []
     available_metrics = ['rmse', 'mape', 'mae', 'mse']
@@ -271,6 +276,10 @@ def compare_and_select_best_model(
     best_model = best_metrics[metric]['model']
     future_predictions = model_results[best_model]['future_predictions']
     
+    # Add is_best_model flag to model_results
+    for model_name in model_results.keys():
+        model_results[model_name]['is_best_model'] = 1 if model_name == best_model else 0
+    
     # Format comparison dictionary
     comparison_dict = {
         'metrics_comparison': metrics_df,
@@ -288,7 +297,7 @@ def compare_and_select_best_model(
             print(f"{m.upper()}: {info['model']} ({info['value']:.4f})")
         print(f"\nSelected best model ({metric}): {best_model}")
     
-    return best_model, future_predictions, comparison_dict
+    return best_model, future_predictions, comparison_dict, model_results
 
 def plot_model_comparison(
     comparison_dict: Dict,
